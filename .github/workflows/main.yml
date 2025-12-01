@@ -48,8 +48,8 @@ jobs:
         echo "RUSTFLAGS=-C target-feature=+a53 -C opt-level=z -C link-arg=-s" >> $GITHUB_ENV
         echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
         
-        # Create editable build script
-        cat > /home/runner/build-config.sh << 'EOF'
+        # Create editable build script - FIXED SYNTAX
+        cat << 'EOF' > /home/runner/build-config.sh
 #!/bin/bash
 
 # =============================================
@@ -99,14 +99,14 @@ EOF
         chmod +x /home/runner/build-config.sh
         
         # Create alternative build profiles
-        cat > /home/runner/build-fast.sh << 'EOF'
+        cat << 'EOF' > /home/runner/build-fast.sh
 #!/bin/bash
 export RUSTFLAGS="-C target-feature=+a53 -C opt-level=3"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
 cargo build --release --target aarch64-unknown-linux-musl
 EOF
 
-        cat > /home/runner/build-debug.sh << 'EOF'
+        cat << 'EOF' > /home/runner/build-debug.sh
 #!/bin/bash
 export RUSTFLAGS=""
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
@@ -199,10 +199,6 @@ EOF
         echo "  1. ssh rustuser@${{ env.TAILSCALE_IP }}"
         echo "  2. Edit build config: nano build-config.sh"
         echo "  3. Build: ./build-config.sh build"
-        echo ""
-        echo "📝 EDIT BUILD SETTINGS:"
-        echo "  Ubah RUSTFLAGS di build-config.sh:"
-        echo "  nano build-config.sh"
         echo ""
         echo "⏰ Runner aktif: ${{ github.event.inputs.keep_alive_minutes }} menit"
         echo "========================================"
