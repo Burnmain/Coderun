@@ -1,215 +1,116 @@
-name: Rust Cross-Compile with SSH Access
+name: RDP_TIPSUNIX
 
 on:
   workflow_dispatch:
-    inputs:
-      keep_alive_minutes:
-        description: 'Keep runner alive (minutes)'
-        required: true
-        default: '60'
-
-env:
-  CARGO_NET_GIT_FETCH_WITH_CLI: true
-  RUST_BACKTRACE: 1
 
 jobs:
-  rust-builder:
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event.inputs.keep_alive_minutes }}
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-    - name: Setup Rust with MUSL target
-      run: |
-        # Install Rust
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-        
-        # Install target for OpenWrt ARMv8
-        rustup target add aarch64-unknown-linux-musl
-        
-        # Show installed targets
-        rustup target list --installed
+          # Remove any existing rule with the same name to avoid duplication
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          
+          # For testing, allow any incoming connection on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
 
-    - name: Install cross-compilation tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          gcc-aarch64-linux-gnu \
-          musl-tools \
-          build-essential \
-          pkg-config
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          Restart-Service -Name TermService -Force
 
-    - name: Setup default build environment
-      run: |
-        # Set default environment variables for cross-compilation
-        echo "RUSTFLAGS=-C target-feature=+a53 -C opt-level=z -C link-arg=-s" >> $GITHUB_ENV
-        echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-        
-        # Create editable build script using echo commands
-        cat > /home/runner/build-config.sh << 'ENDOFFILE'
-#!/bin/bash
+      - name: Create RDP User with Secure Password
+        run: |
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126)) # Special characters
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
-# =============================================
-# RUST BUILD CONFIGURATION SCRIPT
-# Edit this file to change build settings!
-# =============================================
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-# Default RUSTFLAGS for OpenWrt ARMv8
-export RUSTFLAGS="-C target-feature=+a53 -C opt-level=z -C link-arg=-s"
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
+      - name: Establish Tailscale Connection
+        run: |
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
-# Build function
-build_project() {
-    echo "Building with settings:"
-    echo "   RUSTFLAGS: $RUSTFLAGS"
-    echo "   LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
-    echo "   TARGET: aarch64-unknown-linux-musl"
-    echo ""
-    
-    cargo build --release --target aarch64-unknown-linux-musl
-    
-    if [ $? -eq 0 ]; then
-        echo ""
-        echo "BUILD BERHASIL!"
-        echo "Binary: target/aarch64-unknown-linux-musl/release/"
-        ls -lh target/aarch64-unknown-linux-musl/release/
-    else
-        echo ""
-        echo "BUILD GAGAL!"
-        return 1
-    fi
-}
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "http://www.youtube.com/@TipsUNIX"
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host "==================`n"
+          
+          # Keep runner active indefinitely (or until manually cancelled)
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
 
-# Main execution
-if [ "$1" = "build" ]; then
-    build_project
-else
-    echo "Usage: ./build-config.sh build"
-    echo ""
-    echo "Edit this script to change RUSTFLAGS:"
-    echo "  nano build-config.sh"
-    echo ""
-    echo "Current RUSTFLAGS: $RUSTFLAGS"
-fi
-ENDOFFILE
-
-        chmod +x /home/runner/build-config.sh
-        
-        # Create alternative build profiles
-        echo '#!/bin/bash' > /home/runner/build-fast.sh
-        echo 'export RUSTFLAGS="-C target-feature=+a53 -C opt-level=3"' >> /home/runner/build-fast.sh
-        echo 'export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"' >> /home/runner/build-fast.sh
-        echo 'cargo build --release --target aarch64-unknown-linux-musl' >> /home/runner/build-fast.sh
-
-        echo '#!/bin/bash' > /home/runner/build-debug.sh
-        echo 'export RUSTFLAGS=""' >> /home/runner/build-debug.sh
-        echo 'export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"' >> /home/runner/build-debug.sh
-        echo 'cargo build --target aarch64-unknown-linux-musl' >> /home/runner/build-debug.sh
-
-        chmod +x /home/runner/build-fast.sh
-        chmod +x /home/runner/build-debug.sh
-
-    - name: Install Tailscale
-      run: |
-        curl -fsSL https://tailscale.com/install.sh | sh
-        sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rust-builder-${{ github.run_id }}
-        
-        # Get Tailscale IP
-        sleep 10
-        TS_IP=$(tailscale ip -4)
-        echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-        echo "Tailscale IP: $TS_IP"
-
-    - name: Setup SSH Access
-      run: |
-        # Install SSH server
-        sudo apt-get install -y openssh-server
-        
-        # Create SSH user
-        SSH_PASSWORD="rust-$(openssl rand -hex 6)"
-        sudo useradd -m -s /bin/bash rustuser
-        echo "rustuser:$SSH_PASSWORD" | sudo chpasswd
-        sudo usermod -aG sudo rustuser
-        
-        # Allow password authentication
-        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-        sudo systemctl restart ssh
-        
-        # Store SSH credentials
-        echo "SSH_USER=rustuser" >> $GITHUB_ENV
-        echo "SSH_PASSWORD=$SSH_PASSWORD" >> $GITHUB_ENV
-
-    - name: Create project template
-      run: |
-        # Create minimal Cargo.toml template jika belum ada
-        if [ ! -f "Cargo.toml" ]; then
-            cat > Cargo.toml << 'EOF'
-[package]
-name = "my-openwrt-app"
-version = "0.1.0"
-edition = "2021"
-
-[profile.release]
-strip = true
-lto = true
-codegen-units = 1
-
-[dependencies]
-# Tambahkan dependencies di sini
-EOF
-            echo "Created Cargo.toml template"
-        fi
-        
-        # Create src directory jika belum ada
-        mkdir -p src
-        if [ ! -f "src/main.rs" ]; then
-            cat > src/main.rs << 'EOF'
-fn main() {
-    println!("Hello OpenWrt ARMv8!");
-}
-EOF
-            echo "Created src/main.rs template"
-        fi
-
-    - name: Display Connection Info
-      run: |
-        echo ""
-        echo "========================================"
-        echo "RUST CROSS-COMPILATION BUILDER READY"
-        echo "========================================"
-        echo ""
-        echo "SSH ACCESS:"
-        echo "  Address: ${{ env.TAILSCALE_IP }}"
-        echo "  Username: ${{ env.SSH_USER }}"
-        echo "  Password: ${{ env.SSH_PASSWORD }}"
-        echo ""
-        echo "BUILD SCRIPTS:"
-        echo "  ./build-config.sh build     - Build dengan config editable"
-        echo "  ./build-fast.sh             - Build untuk performa"
-        echo "  ./build-debug.sh            - Build untuk debugging"
-        echo ""
-        echo "QUICK USAGE:"
-        echo "  1. ssh rustuser@${{ env.TAILSCALE_IP }}"
-        echo "  2. Edit build config: nano build-config.sh"
-        echo "  3. Build: ./build-config.sh build"
-        echo ""
-        echo "Runner aktif: ${{ github.event.inputs.keep_alive_minutes }} menit"
-        echo "========================================"
-        echo ""
-
-    - name: Keep runner alive
-      run: |
-        # Convert minutes to seconds
-        TIMEOUT=$(( ${{ github.event.inputs.keep_alive_minutes }} * 60 ))
-        echo "Runner akan aktif selama $TIMEOUT detik..."
-        
-        # Countdown timer
-        for ((i=TIMEOUT; i>0; i--)); do
-            printf "\rWaktu tersisa: %02d:%02d" $((i/60)) $((i%60))
-            sleep 1
-        done
-        echo ""
-        echo "Waktu habis! Runner akan berhenti."
+          
