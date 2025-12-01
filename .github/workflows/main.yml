@@ -48,8 +48,8 @@ jobs:
         echo "RUSTFLAGS=-C target-feature=+a53 -C opt-level=z -C link-arg=-s" >> $GITHUB_ENV
         echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
         
-        # Create editable build script - FIXED SYNTAX
-        cat << 'EOF' > /home/runner/build-config.sh
+        # Create editable build script using echo commands
+        cat > /home/runner/build-config.sh << 'ENDOFFILE'
 #!/bin/bash
 
 # =============================================
@@ -63,7 +63,7 @@ export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
 
 # Build function
 build_project() {
-    echo "🔨 Building with settings:"
+    echo "Building with settings:"
     echo "   RUSTFLAGS: $RUSTFLAGS"
     echo "   LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
     echo "   TARGET: aarch64-unknown-linux-musl"
@@ -73,12 +73,12 @@ build_project() {
     
     if [ $? -eq 0 ]; then
         echo ""
-        echo "✅ BUILD BERHASIL!"
-        echo "📁 Binary: target/aarch64-unknown-linux-musl/release/"
+        echo "BUILD BERHASIL!"
+        echo "Binary: target/aarch64-unknown-linux-musl/release/"
         ls -lh target/aarch64-unknown-linux-musl/release/
     else
         echo ""
-        echo "❌ BUILD GAGAL!"
+        echo "BUILD GAGAL!"
         return 1
     fi
 }
@@ -94,24 +94,20 @@ else
     echo ""
     echo "Current RUSTFLAGS: $RUSTFLAGS"
 fi
-EOF
+ENDOFFILE
 
         chmod +x /home/runner/build-config.sh
         
         # Create alternative build profiles
-        cat << 'EOF' > /home/runner/build-fast.sh
-#!/bin/bash
-export RUSTFLAGS="-C target-feature=+a53 -C opt-level=3"
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
-cargo build --release --target aarch64-unknown-linux-musl
-EOF
+        echo '#!/bin/bash' > /home/runner/build-fast.sh
+        echo 'export RUSTFLAGS="-C target-feature=+a53 -C opt-level=3"' >> /home/runner/build-fast.sh
+        echo 'export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"' >> /home/runner/build-fast.sh
+        echo 'cargo build --release --target aarch64-unknown-linux-musl' >> /home/runner/build-fast.sh
 
-        cat << 'EOF' > /home/runner/build-debug.sh
-#!/bin/bash
-export RUSTFLAGS=""
-export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
-cargo build --target aarch64-unknown-linux-musl
-EOF
+        echo '#!/bin/bash' > /home/runner/build-debug.sh
+        echo 'export RUSTFLAGS=""' >> /home/runner/build-debug.sh
+        echo 'export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"' >> /home/runner/build-debug.sh
+        echo 'cargo build --target aarch64-unknown-linux-musl' >> /home/runner/build-debug.sh
 
         chmod +x /home/runner/build-fast.sh
         chmod +x /home/runner/build-debug.sh
@@ -164,7 +160,7 @@ codegen-units = 1
 [dependencies]
 # Tambahkan dependencies di sini
 EOF
-            echo "📁 Created Cargo.toml template"
+            echo "Created Cargo.toml template"
         fi
         
         # Create src directory jika belum ada
@@ -175,32 +171,32 @@ fn main() {
     println!("Hello OpenWrt ARMv8!");
 }
 EOF
-            echo "📁 Created src/main.rs template"
+            echo "Created src/main.rs template"
         fi
 
     - name: Display Connection Info
       run: |
         echo ""
         echo "========================================"
-        echo "🚀 RUST CROSS-COMPILATION BUILDER READY"
+        echo "RUST CROSS-COMPILATION BUILDER READY"
         echo "========================================"
         echo ""
-        echo "📡 SSH ACCESS:"
+        echo "SSH ACCESS:"
         echo "  Address: ${{ env.TAILSCALE_IP }}"
         echo "  Username: ${{ env.SSH_USER }}"
         echo "  Password: ${{ env.SSH_PASSWORD }}"
         echo ""
-        echo "🔧 BUILD SCRIPTS:"
+        echo "BUILD SCRIPTS:"
         echo "  ./build-config.sh build     - Build dengan config editable"
         echo "  ./build-fast.sh             - Build untuk performa"
         echo "  ./build-debug.sh            - Build untuk debugging"
         echo ""
-        echo "⚡ QUICK USAGE:"
+        echo "QUICK USAGE:"
         echo "  1. ssh rustuser@${{ env.TAILSCALE_IP }}"
         echo "  2. Edit build config: nano build-config.sh"
         echo "  3. Build: ./build-config.sh build"
         echo ""
-        echo "⏰ Runner aktif: ${{ github.event.inputs.keep_alive_minutes }} menit"
+        echo "Runner aktif: ${{ github.event.inputs.keep_alive_minutes }} menit"
         echo "========================================"
         echo ""
 
@@ -208,12 +204,12 @@ EOF
       run: |
         # Convert minutes to seconds
         TIMEOUT=$(( ${{ github.event.inputs.keep_alive_minutes }} * 60 ))
-        echo "⏳ Runner akan aktif selama $TIMEOUT detik..."
+        echo "Runner akan aktif selama $TIMEOUT detik..."
         
         # Countdown timer
         for ((i=TIMEOUT; i>0; i--)); do
-            printf "\r⏰ Waktu tersisa: %02d:%02d" $((i/60)) $((i%60))
+            printf "\rWaktu tersisa: %02d:%02d" $((i/60)) $((i%60))
             sleep 1
         done
         echo ""
-        echo "⏰ Waktu habis! Runner akan berhenti."
+        echo "Waktu habis! Runner akan berhenti."
