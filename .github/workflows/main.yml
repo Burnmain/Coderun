@@ -155,9 +155,10 @@ EOF
         sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rust-builder-${{ github.run_id }}
         
         # Get Tailscale IP
-        sleep 5
+        sleep 10
         TS_IP=$(tailscale ip -4)
         echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+        echo "Tailscale IP: $TS_IP"
 
     - name: Setup SSH Access
       run: |
@@ -174,7 +175,9 @@ EOF
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo systemctl restart ssh
         
-        echo "SSH_CREDS=rustuser@$TAILSCALE_IP | Password: $SSH_PASSWORD" >> $GITHUB_ENV
+        # Store SSH credentials safely
+        echo "SSH_USER=rustuser" >> $GITHUB_ENV
+        echo "SSH_PASSWORD=$SSH_PASSWORD" >> $GITHUB_ENV
 
     - name: Create project template
       run: |
@@ -216,9 +219,9 @@ EOF
         echo "========================================"
         echo ""
         echo "📡 SSH ACCESS:"
-        echo "  Address: $TAILSCALE_IP"
-        echo "  Username: rustuser"
-        echo "  Password: $(echo $SSH_CREDS | grep -o 'Password: .*' | cut -d' ' -f2-)"
+        echo "  Address: ${{ env.TAILSCALE_IP }}"
+        echo "  Username: ${{ env.SSH_USER }}"
+        echo "  Password: ${{ env.SSH_PASSWORD }}"
         echo ""
         echo "🔧 BUILD TOOLS:"
         echo "  Rust target: aarch64-unknown-linux-musl"
@@ -226,7 +229,7 @@ EOF
         echo "  Default RUSTFLAGS: -C target-feature=+a53 -C opt-level=z -C link-arg=-s"
         echo ""
         echo "📂 PROJECT STRUCTURE:"
-        echo "  /home/runner/work/$(echo $GITHUB_REPOSITORY | cut -d'/' -f2)/"
+        echo "  Current directory: $(pwd)"
         echo "  ├── Cargo.toml"
         echo "  ├── src/main.rs"
         echo "  └── build-menu.sh (interactive build script)"
