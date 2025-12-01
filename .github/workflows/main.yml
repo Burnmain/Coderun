@@ -48,106 +48,73 @@ jobs:
         echo "RUSTFLAGS=-C target-feature=+a53 -C opt-level=z -C link-arg=-s" >> $GITHUB_ENV
         echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
         
-        # Create build script with interactive menu
-        cat > /home/runner/build-menu.sh << 'EOF'
+        # Create editable build script
+        cat > /home/runner/build-config.sh << 'EOF'
 #!/bin/bash
 
-# Default build profile
-DEFAULT_FLAGS="-C target-feature=+a53 -C opt-level=z -C link-arg=-s"
+# =============================================
+# RUST BUILD CONFIGURATION SCRIPT
+# Edit this file to change build settings!
+# =============================================
 
-echo "========================================"
-echo "    RUST CROSS-COMPILATION BUILDER"
-echo "========================================"
-echo "Target: aarch64-unknown-linux-musl"
-echo "Current RUSTFLAGS: ${RUSTFLAGS:-$DEFAULT_FLAGS}"
-echo ""
+# Default RUSTFLAGS for OpenWrt ARMv8
+export RUSTFLAGS="-C target-feature=+a53 -C opt-level=z -C link-arg=-s"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
 
-PS3='Pilih build profile [1-5]: '
-options=(
-    "Small size (opt-level=z) - untuk OpenWrt"
-    "Fast (opt-level=3) - performa maksimal"
-    "Balanced (opt-level=2) - default cargo"
-    "Debug (no optimizations) - debugging"
-    "Custom RUSTFLAGS - input manual"
-)
-
-select opt in "${options[@]}"
-do
-    case $REPLY in
-        1)
-            export RUSTFLAGS="-C target-feature=+a53 -C opt-level=z -C link-arg=-s"
-            echo "✓ Menggunakan: Small size optimization"
-            break
-            ;;
-        2)
-            export RUSTFLAGS="-C target-feature=+a53 -C opt-level=3"
-            echo "✓ Menggunakan: Fast optimization"
-            break
-            ;;
-        3)
-            export RUSTFLAGS="-C target-feature=+a53 -C opt-level=2"
-            echo "✓ Menggunakan: Balanced optimization"
-            break
-            ;;
-        4)
-            export RUSTFLAGS=""
-            echo "✓ Menggunakan: No optimization (debug)"
-            break
-            ;;
-        5)
-            read -p "Masukkan RUSTFLAGS custom: " custom_flags
-            export RUSTFLAGS="$custom_flags"
-            echo "✓ Menggunakan: Custom flags"
-            break
-            ;;
-        *) 
-            echo "Pilihan invalid. Coba lagi."
-            ;;
-    esac
-done
-
-echo ""
-echo "RUSTFLAGS yang aktif: $RUSTFLAGS"
-echo ""
-
-# Ask for build command
-read -p "Jalankan cargo build? (y/n): " -n 1 -r
-echo ""
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "🚀 Building dengan command:"
-    echo "cargo build --release --target aarch64-unknown-linux-musl"
+# Build function
+build_project() {
+    echo "🔨 Building with settings:"
+    echo "   RUSTFLAGS: $RUSTFLAGS"
+    echo "   LINKER: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
+    echo "   TARGET: aarch64-unknown-linux-musl"
     echo ""
     
-    # Execute build
     cargo build --release --target aarch64-unknown-linux-musl
     
     if [ $? -eq 0 ]; then
         echo ""
         echo "✅ BUILD BERHASIL!"
-        echo "Binary tersedia di: target/aarch64-unknown-linux-musl/release/"
-        echo ""
+        echo "📁 Binary: target/aarch64-unknown-linux-musl/release/"
         ls -lh target/aarch64-unknown-linux-musl/release/
     else
         echo ""
         echo "❌ BUILD GAGAL!"
+        return 1
     fi
+}
+
+# Main execution
+if [ "$1" = "build" ]; then
+    build_project
 else
-    echo "Build dibatalkan."
-    echo "Anda bisa jalankan manual dengan:"
-    echo "  cargo build --release --target aarch64-unknown-linux-musl"
+    echo "Usage: ./build-config.sh build"
+    echo ""
+    echo "Edit this script to change RUSTFLAGS:"
+    echo "  nano build-config.sh"
+    echo ""
+    echo "Current RUSTFLAGS: $RUSTFLAGS"
 fi
 EOF
 
-        chmod +x /home/runner/build-menu.sh
+        chmod +x /home/runner/build-config.sh
         
-        # Create quick build script (one-liner)
-        cat > /home/runner/quick-build.sh << 'EOF'
+        # Create alternative build profiles
+        cat > /home/runner/build-fast.sh << 'EOF'
 #!/bin/bash
-# Quick build dengan default settings
-export RUSTFLAGS="-C target-feature=+a53 -C opt-level=z -C link-arg=-s"
+export RUSTFLAGS="-C target-feature=+a53 -C opt-level=3"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
 cargo build --release --target aarch64-unknown-linux-musl
 EOF
-        chmod +x /home/runner/quick-build.sh
+
+        cat > /home/runner/build-debug.sh << 'EOF'
+#!/bin/bash
+export RUSTFLAGS=""
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="aarch64-linux-gnu-gcc"
+cargo build --target aarch64-unknown-linux-musl
+EOF
+
+        chmod +x /home/runner/build-fast.sh
+        chmod +x /home/runner/build-debug.sh
 
     - name: Install Tailscale
       run: |
@@ -175,7 +142,7 @@ EOF
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo systemctl restart ssh
         
-        # Store SSH credentials safely
+        # Store SSH credentials
         echo "SSH_USER=rustuser" >> $GITHUB_ENV
         echo "SSH_PASSWORD=$SSH_PASSWORD" >> $GITHUB_ENV
 
@@ -223,24 +190,21 @@ EOF
         echo "  Username: ${{ env.SSH_USER }}"
         echo "  Password: ${{ env.SSH_PASSWORD }}"
         echo ""
-        echo "🔧 BUILD TOOLS:"
-        echo "  Rust target: aarch64-unknown-linux-musl"
-        echo "  Linker: aarch64-linux-gnu-gcc"
-        echo "  Default RUSTFLAGS: -C target-feature=+a53 -C opt-level=z -C link-arg=-s"
+        echo "🔧 BUILD SCRIPTS:"
+        echo "  ./build-config.sh build     - Build dengan config editable"
+        echo "  ./build-fast.sh             - Build untuk performa"
+        echo "  ./build-debug.sh            - Build untuk debugging"
         echo ""
-        echo "📂 PROJECT STRUCTURE:"
-        echo "  Current directory: $(pwd)"
-        echo "  ├── Cargo.toml"
-        echo "  ├── src/main.rs"
-        echo "  └── build-menu.sh (interactive build script)"
+        echo "⚡ QUICK USAGE:"
+        echo "  1. ssh rustuser@${{ env.TAILSCALE_IP }}"
+        echo "  2. Edit build config: nano build-config.sh"
+        echo "  3. Build: ./build-config.sh build"
         echo ""
-        echo "⚡ QUICK COMMANDS (setelah login SSH):"
-        echo "  ./build-menu.sh              # Interactive build menu"
-        echo "  ./quick-build.sh             # Quick build dengan default"
-        echo "  nano src/main.rs             # Edit source code"
-        echo "  cargo build --release --target aarch64-unknown-linux-musl"
+        echo "📝 EDIT BUILD SETTINGS:"
+        echo "  Ubah RUSTFLAGS di build-config.sh:"
+        echo "  nano build-config.sh"
         echo ""
-        echo "⏰ Runner akan aktif selama ${{ github.event.inputs.keep_alive_minutes }} menit"
+        echo "⏰ Runner aktif: ${{ github.event.inputs.keep_alive_minutes }} menit"
         echo "========================================"
         echo ""
 
